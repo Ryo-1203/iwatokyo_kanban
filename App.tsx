@@ -5,103 +5,88 @@ import { SettingsModal } from './components/SettingsModal';
 import { EmployeeModal } from './components/EmployeeModal';
 import { SettingsIcon } from './components/icons';
 import { Employee, CalendarConfig } from './types';
-import { INITIAL_EMPLOYEES, INITIAL_CALENDARS } from './constants';
-import { employeesAPI, calendarsAPI } from './lib/api';
 
 const App: React.FC = () => {
-  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
-  const [calendars, setCalendars] = useState<CalendarConfig[]>(INITIAL_CALENDARS);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [calendars, setCalendars] = useState<CalendarConfig[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // 初回読み込み時にDBからデータを取得する
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch('/api/data');
+        if (!response.ok) throw new Error('Failed to fetch data');
+        const data = await response.json();
+        setEmployees(data.employees);
+        setCalendars(data.calendars);
+      } catch (error) {
+        console.error("Failed to fetch data from DB:", error);
+        // エラーが発生した場合のフォールバック処理を追加することもできます
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  // データをAPI経由で一括保存する汎用関数
+  const saveData = async (data: { employees?: Employee[], calendars?: CalendarConfig[] }) => {
+    try {
+      await fetch('/api/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    } catch (error) {
+      console.error("Failed to save data", error);
+    }
+  };
 
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
 
-  // データベースから初期データを読み込む
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [employeesData, calendarsData] = await Promise.all([
-          employeesAPI.get(),
-          calendarsAPI.get()
-        ]);
+  const handleUpdateEmployeeStatus = (id: string, returnTime: string, destination: string) => {
+    const updatedEmployees = employees.map(emp =>
+      emp.id === id ? { ...emp, returnTime, destination } : emp
+    );
+    setEmployees(updatedEmployees);
+    saveData({ employees: updatedEmployees }); // DBに保存
+    setSelectedEmployee(null);
+  };
 
-        if (employeesData.length > 0) {
-          setEmployees(employeesData);
-        }
+  // ReactのState更新関数を直接渡せるように修正
+  const handleSetEmployees = (newEmployeesOrUpdater: React.SetStateAction<Employee[]>) => {
+    const newEmployees = typeof newEmployeesOrUpdater === 'function'
+      ? newEmployeesOrUpdater(employees)
+      : newEmployeesOrUpdater;
+    setEmployees(newEmployees);
+    saveData({ employees: newEmployees });
+  };
 
-        if (calendarsData.length > 0) {
-          setCalendars(calendarsData);
-        }
-      } catch (error) {
-        console.error('Failed to load data from database:', error);
-        // データベース接続エラーの場合は初期データを使用
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
-  }, []);
-
-  const handleUpdateEmployeeStatus = async (id: string, returnTime: string, destination: string) => {
-    try {
-      const updatedEmployee = await employeesAPI.update({ id, returnTime, destination } as Employee);
-      setEmployees(prev =>
-        prev.map(emp =>
-          emp.id === id ? updatedEmployee : emp
-        )
-      );
-      setSelectedEmployee(null);
-    } catch (error) {
-      console.error('Failed to update employee:', error);
-      // エラーの場合はローカルで更新
-      setEmployees(prev =>
-        prev.map(emp =>
-          emp.id === id ? { ...emp, returnTime, destination } : emp
-        )
-      );
-      setSelectedEmployee(null);
-    }
+  const handleSetCalendars = (newCalendarsOrUpdater: React.SetStateAction<CalendarConfig[]>) => {
+    const newCalendars = typeof newCalendarsOrUpdater === 'function'
+      ? newCalendarsOrUpdater(calendars)
+      : newCalendarsOrUpdater;
+    setCalendars(newCalendars);
+    saveData({ calendars: newCalendars });
   };
 
   const handleSelectEmployee = (employee: Employee) => {
     setSelectedEmployee(employee);
   };
 
-  const handleSaveEmployees = async (newEmployees: Employee[]) => {
-    try {
-      await Promise.all(newEmployees.map(emp => employeesAPI.save(emp)));
-      setEmployees(newEmployees);
-    } catch (error) {
-      console.error('Failed to save employees:', error);
-      // エラーの場合はローカルで更新
-      setEmployees(newEmployees);
-    }
-  };
+  if (isLoading) {
+    return <div className="flex h-screen w-full items-center justify-center text-gray-500">データベースからデータを読み込んでいます...</div>;
+  }
 
-  const handleSaveCalendars = async (newCalendars: CalendarConfig[]) => {
-    try {
-      await Promise.all(newCalendars.map(cal => calendarsAPI.save(cal)));
-      setCalendars(newCalendars);
-    } catch (error) {
-      console.error('Failed to save calendars:', error);
-      // エラーの場合はローカルで更新
-      setCalendars(newCalendars);
-    }
-  };
-  
   return (
     <div className="flex h-screen bg-brand-primary text-brand-text font-sans">
       <div className="w-1/2 p-4 flex flex-col h-full">
-        <CalendarView 
-          calendars={calendars} 
-        />
+        <CalendarView calendars={calendars} />
       </div>
       <div className="w-1/2 p-4 border-l border-brand-accent flex flex-col h-full">
-        <KanbanBoard 
-          employees={employees} 
-          onSelectEmployee={handleSelectEmployee} 
-        />
+        <KanbanBoard employees={employees} onSelectEmployee={handleSelectEmployee} />
       </div>
 
       <button
@@ -115,9 +100,9 @@ const App: React.FC = () => {
       {isSettingsOpen && (
         <SettingsModal
           employees={employees}
-          setEmployees={handleSaveEmployees}
+          setEmployees={handleSetEmployees}
           calendars={calendars}
-          setCalendars={handleSaveCalendars}
+          setCalendars={handleSetCalendars}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
