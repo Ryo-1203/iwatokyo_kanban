@@ -1,11 +1,7 @@
 import { sql } from '@vercel/postgres';
-import { setupDatabase } from '../lib/db';
 
-// データベースのセットアップを確実に行う
-await setupDatabase();
-
-export async function GET() {
-  try {
+export function GET() {
+  return handleRequest(async () => {
     const result = await sql`
       SELECT
         id,
@@ -15,29 +11,17 @@ export async function GET() {
       FROM employees
       ORDER BY id
     `;
-
-    return new Response(JSON.stringify(result.rows), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    console.error('Error fetching employees:', error);
-    return new Response(JSON.stringify({ error: 'Failed to fetch employees' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+    return result.rows;
+  });
 }
 
-export async function POST(request: Request) {
-  try {
+export function POST(request) {
+  return handleRequest(async () => {
     const body = await request.json();
     const { id, name, returnTime, destination } = body;
 
     if (!id || !name) {
-      return new Response(JSON.stringify({ error: 'ID and name are required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      throw new Error('ID and name are required');
     }
 
     const result = await sql`
@@ -53,29 +37,17 @@ export async function POST(request: Request) {
         return_time as "returnTime",
         destination
     `;
-
-    return new Response(JSON.stringify(result.rows[0]), {
-      headers: { 'Content-Type': 'application/json' }
-    });
-  } catch (error) {
-    console.error('Error upserting employee:', error);
-    return new Response(JSON.stringify({ error: 'Failed to save employee' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
+    return result.rows[0];
+  });
 }
 
-export async function PUT(request: Request) {
-  try {
+export function PUT(request) {
+  return handleRequest(async () => {
     const body = await request.json();
     const { id, returnTime, destination } = body;
 
     if (!id) {
-      return new Response(JSON.stringify({ error: 'ID is required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      throw new Error('ID is required');
     }
 
     const result = await sql`
@@ -92,20 +64,62 @@ export async function PUT(request: Request) {
     `;
 
     if (result.rows.length === 0) {
-      return new Response(JSON.stringify({ error: 'Employee not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      throw new Error('Employee not found');
     }
 
-    return new Response(JSON.stringify(result.rows[0]), {
+    return result.rows[0];
+  });
+}
+
+// 共通ハンドラー関数
+async function handleRequest(handler) {
+  try {
+    // データベース初期化
+    await initializeDatabase();
+
+    const result = await handler();
+    return new Response(JSON.stringify(result), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    console.error('Error updating employee:', error);
-    return new Response(JSON.stringify({ error: 'Failed to update employee' }), {
-      status: 500,
+    console.error('API Error:', error);
+    const status = error.message.includes('required') ? 400 :
+                   error.message === 'Employee not found' ? 404 : 500;
+    return new Response(JSON.stringify({ error: error.message }), {
+      status,
       headers: { 'Content-Type': 'application/json' }
     });
+  }
+}
+
+// データベース初期化
+async function initializeDatabase() {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS employees (
+        id VARCHAR(255) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        return_time VARCHAR(10),
+        destination VARCHAR(255)
+      )
+    `;
+
+    // 初期データのチェックと挿入
+    const countResult = await sql`SELECT COUNT(*) FROM employees`;
+    if (countResult.rows[0].count === 0) {
+      await sql`
+        INSERT INTO employees (id, name, return_time, destination)
+        VALUES
+          ('1', 'Alice', '', ''),
+          ('2', 'Bob', '14:00', 'Client Meeting'),
+          ('3', 'Charlie', '', ''),
+          ('4', 'Diana', '15:30', 'Lunch'),
+          ('5', 'Ethan', '', ''),
+          ('6', 'Fiona', '13:00', 'Supplier Visit')
+      `;
+    }
+  } catch (error) {
+    console.error('Database initialization error:', error);
+    throw error;
   }
 }
