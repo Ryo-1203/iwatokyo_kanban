@@ -1,7 +1,30 @@
 // /api/data.ts
 import { sql } from '@vercel/postgres';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { INITIAL_EMPLOYEES, INITIAL_CALENDARS } from '../constants';
+
+// --- 初期データをこのファイル内に直接定義 ---
+const INITIAL_EMPLOYEES = [
+  { id: '1', name: 'Alice', returnTime: '', destination: '' },
+  { id: '2', name: 'Bob', returnTime: '14:00', destination: 'Client Meeting' },
+  { id: '3', name: 'Charlie', returnTime: '', destination: '' },
+  { id: '4', name: 'Diana', returnTime: '15:30', destination: 'Lunch' },
+  { id: '5', name: 'Ethan', returnTime: '', destination: '' },
+  { id: '6', name: 'Fiona', returnTime: '13:00', destination: 'Supplier Visit' },
+];
+
+const INITIAL_CALENDARS = [
+    {
+        id: '1',
+        name: '会社の祝日',
+        src: 'https://calendar.google.com/calendar/embed?src=ja.japanese%23holiday%40group.v.calendar.google.com&ctz=Asia%2FTokyo'
+    },
+    {
+        id: '2',
+        name: '営業チーム',
+        src: ''
+    },
+];
+// -----------------------------------------
 
 export default async function handler(
   req: VercelRequest,
@@ -67,8 +90,8 @@ export default async function handler(
       try {
         await client.query('BEGIN');
         if (employees) {
-          await client.query('DELETE FROM employees;'); // データを一旦すべて削除
-          for (const emp of employees) { // 新しいデータセットを挿入
+          await client.query('DELETE FROM employees;');
+          for (const emp of employees) {
             await client.query(
               'INSERT INTO employees (id, name, "returnTime", destination) VALUES ($1, $2, $3, $4)',
               [emp.id, emp.name, emp.returnTime, emp.destination]
@@ -76,8 +99,8 @@ export default async function handler(
           }
         }
         if (calendars) {
-          await client.query('DELETE FROM calendars;'); // データを一旦すべて削除
-           for (const cal of calendars) { // 新しいデータセットを挿入
+          await client.query('DELETE FROM calendars;');
+           for (const cal of calendars) {
              await client.query(
                'INSERT INTO calendars (id, name, src) VALUES ($1, $2, $3)',
                [cal.id, cal.name, cal.src]
@@ -94,12 +117,10 @@ export default async function handler(
       }
     }
 
-    // --- GET/POST以外のメソッドへの対応 ---
     res.setHeader('Allow', ['GET', 'POST']);
     res.status(405).end(`Method ${req.method} Not Allowed`);
 
   } catch (error) {
-    // --- エラーハンドリング ---
     console.error(error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: 'Internal Server Error', details: errorMessage });
