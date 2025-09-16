@@ -32,11 +32,12 @@ export default async function handler(
 ) {
   try {
     // --- データベースとテーブルの初期化 ---
+    // ▼ 修正点1: "returnTime" を return_time に変更
     await sql`
       CREATE TABLE IF NOT EXISTS employees (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255),
-        "returnTime" VARCHAR(255),
+        return_time VARCHAR(255),
         destination TEXT
       );
     `;
@@ -50,17 +51,18 @@ export default async function handler(
 
     // --- GETリクエスト（データ取得）の処理 ---
     if (req.method === 'GET') {
-      let { rows: employees } = await sql`SELECT * FROM employees ORDER BY name;`;
+      // ▼ 修正点2: return_time を "returnTime" として取得するよう修正
+      let { rows: employees } = await sql`SELECT id, name, return_time AS "returnTime", destination FROM employees ORDER BY name;`;
       let { rows: calendars } = await sql`SELECT * FROM calendars ORDER BY name;`;
 
-      // もしDBにデータがなければ、初期データを挿入して返す
       if (employees.length === 0 && calendars.length === 0) {
         const client = await sql.connect();
         try {
             await client.query('BEGIN');
+            // ▼ 修正点3: INSERT先の列名を return_time に変更
             for (const emp of INITIAL_EMPLOYEES) {
                 await client.query(
-                    'INSERT INTO employees (id, name, "returnTime", destination) VALUES ($1, $2, $3, $4)',
+                    'INSERT INTO employees (id, name, return_time, destination) VALUES ($1, $2, $3, $4)',
                     [emp.id, emp.name, emp.returnTime, emp.destination]
                 );
             }
@@ -91,9 +93,10 @@ export default async function handler(
         await client.query('BEGIN');
         if (employees) {
           await client.query('DELETE FROM employees;');
+          // ▼ 修正点4: INSERT先の列名を return_time に変更
           for (const emp of employees) {
             await client.query(
-              'INSERT INTO employees (id, name, "returnTime", destination) VALUES ($1, $2, $3, $4)',
+              'INSERT INTO employees (id, name, return_time, destination) VALUES ($1, $2, $3, $4)',
               [emp.id, emp.name, emp.returnTime, emp.destination]
             );
           }
