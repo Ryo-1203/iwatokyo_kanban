@@ -32,8 +32,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ calendars }) => {
         {combinedCalendarSrc ? (
           <iframe
             src={combinedCalendarSrc}
-            className="h-full"
-            style={{ border: 'solid 1px #777', width: '800px' }}
+            className="w-full h-full"
+            style={{ border: 'solid 1px #777' }}
             frameBorder={0}
             scrolling="no"
             title="チームカレンダー"
