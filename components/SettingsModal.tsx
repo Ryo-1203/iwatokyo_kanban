@@ -4,15 +4,15 @@ import { CloseIcon, TrashIcon, PlusIcon, EditIcon } from './icons';
 
 interface SettingsModalProps {
   employees: Employee[];
-  setEmployees: React.Dispatch<React.SetStateAction<Employee[]>>;
+  setEmployees: (employees: Employee[]) => Promise<void> | void;
   calendars: CalendarConfig[];
-  setCalendars: React.Dispatch<React.SetStateAction<CalendarConfig[]>>;
+  setCalendars: (calendars: CalendarConfig[]) => Promise<void> | void;
   onClose: () => void;
 }
 
 type SettingsTab = 'employees' | 'calendars';
 
-const EmployeeSettings: React.FC<{ employees: Employee[]; setEmployees: React.Dispatch<React.SetStateAction<Employee[]>> }> = ({ employees, setEmployees }) => {
+const EmployeeSettings: React.FC<{ employees: Employee[]; setEmployees: (employees: Employee[]) => Promise<void> | void }> = ({ employees, setEmployees }) => {
   const [newEmployeeName, setNewEmployeeName] = useState('');
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
@@ -92,7 +92,7 @@ const EmployeeSettings: React.FC<{ employees: Employee[]; setEmployees: React.Di
   );
 };
 
-const CalendarSettings: React.FC<{ calendars: CalendarConfig[]; setCalendars: React.Dispatch<React.SetStateAction<CalendarConfig[]>> }> = ({ calendars, setCalendars }) => {
+const CalendarSettings: React.FC<{ calendars: CalendarConfig[]; setCalendars: (calendars: CalendarConfig[]) => Promise<void> | void }> = ({ calendars, setCalendars }) => {
   const [newCalName, setNewCalName] = useState('');
   const [newCalSrc, setNewCalSrc] = useState('');
 

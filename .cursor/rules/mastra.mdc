@@ -1,0 +1,366 @@
+---
+description: Mastra TypeScript Agent Framework開発用のProject Rules。型安全性、AI SDK v5対応、プロセッサーシステム、A2A通信、AI Tracingを含む最新ベストプラクティスを強制し、MCP使用とチェックリスト管理を必須とする。
+globs: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/mastra/**/*", "src/**/*"]
+alwaysApply: false
+---
+
+## 必須開始メッセージ
+会話の最初は必ず「Ruleを読み込みました」から始めてください。
+
+## MCP効率的使用ルール
+- **段階的検索**: まず既存知識で実装を試行し、エラーや不明点が発生した場合のみMCPを使用
+- **特定検索**: 包括的なドキュメント検索ではなく、具体的なエラーや機能に特化した検索を実行
+- **バージョン特化**: 使用中のMastraバージョンに関連する情報のみを優先的に検索
+- **コンテキスト制限**: 1回の検索で1つの機能または問題に絞って情報を取得
+
+## チェックリスト管理ルール
+- **実装前**: 必ずchecklist.mdファイルを作成し、実装項目のチェックリストを作成してください
+- **実装後**: 実装を行ったら必ずchecklist.mdを更新し、完了した項目をチェックしてください
+- チェックリストには以下の項目を含めてください：
+  - [ ] Mastra公式Docs確認
+  - [ ] 型定義の確認
+  - [ ] スキーマ定義（inputSchema/outputSchema）
+  - [ ] エラーハンドリング
+  - [ ] テスト実装
+  - [ ] ドキュメント更新
+  - [ ] AI SDK v5対応確認
+  - [ ] プロセッサー実装確認
+  - [ ] テレメトリ設定確認
+
+## Mastra Framework 基本ルール
+
+### パッケージとインポート
+- メインパッケージは `@mastra/core` を使用
+- 常に最新バージョン（@latest）を使用
+- 各機能別パッケージ：
+  - Agents: `@mastra/core/agent`
+  - Workflows: `@mastra/core/workflows`
+  - Tools: `@mastra/core/tools`
+  - Memory: `@mastra/memory`
+  - MCP: `@mastra/mcp`
+  - Processors: `@mastra/core/processors`
+  - Voice: `@mastra/voice-*`（各プロバイダー）
+  - Loggers: `@mastra/loggers`
+
+### TypeScript厳格ルール
+- 必ずTypeScriptで開発し、厳密な型チェックを有効にする
+- `zod` スキーマを使用してバリデーションを実装（Zod 3.25.0以降対応）
+- すべての関数に適切な型注釈を付ける
+- `any` 型の使用を避け、具体的な型を定義する
+- Zodスキーマは必ず `.describe()` を使用して説明を追加
+
+### Agents開発ルール
+```typescript
+// 正しいAgent定義例
+import { Agent } from "@mastra/core/agent";
+import { openai } from "@ai-sdk/openai";
+
+const agent = new Agent({
+  name: "AgentName", // 必須：明確な名前
+  description: "エージェントの説明", // 推奨：vNext Agent Networkでのルーティング用
+  instructions: "明確な指示", // 必須：詳細な指示
+  model: openai("gpt-4o-mini"), // 必須：モデル指定
+  tools: {}, // オプション：ツール定義
+  memory: memoryInstance, // オプション：メモリインスタンス
+  inputProcessors: [], // オプション：入力プロセッサー
+  outputProcessors: [], // オプション：出力プロセッサー
+});
+```
+
+### 新しいストリーミングAPI（AI SDK v5サポート）
+```typescript
+// streamVNext - 実験的な新しいストリーミングAPI
+const stream = await agent.streamVNext("メッセージ", {
+  format: 'mastra', // または 'aisdk' for AI SDK v5 compatibility
+  structuredOutput: {
+    schema: z.object({
+      sentiment: z.enum(['positive', 'negative', 'neutral']),
+      confidence: z.number(),
+    }),
+    model: openai("gpt-4o-mini"),
+    errorStrategy: 'warn',
+  },
+  outputProcessors: [
+    new ModerationProcessor({ model: openai("gpt-4.1-nano") }),
+    new TokenLimiterProcessor({ maxTokens: 1000 }),
+  ],
+});
+
+// generateVNext - 実験的な新しい生成API
+const result = await agent.generateVNext("メッセージ", {
+  structuredOutput: {
+    schema: z.object({}),
+    model: openai("gpt-4o-mini"),
+  },
+});
+```
+
+### プロセッサー開発ルール
+```typescript
+// 入力プロセッサーの例
+import { 
+  UnicodeNormalizer, 
+  ModerationProcessor, 
+  PromptInjectionDetector,
+  PIIDetector 
+} from "@mastra/core/processors";
+
+const agent = new Agent({
+  inputProcessors: [
+    new UnicodeNormalizer({ stripControlChars: true }),
+    new PromptInjectionDetector({ model: openai("gpt-4.1-nano") }),
+    new ModerationProcessor({ model: openai("gpt-4.1-nano") }),
+    new PIIDetector({ model: openai("gpt-4.1-nano"), strategy: 'redact' }),
+  ],
+});
+
+// 出力プロセッサーの例
+const agent = new Agent({
+  outputProcessors: [
+    new ModerationProcessor({ model: openai("gpt-4.1-nano") }),
+    new PIIDetector({ strategy: 'redact' }),
+    new BatchPartsProcessor({ maxBatchSize: 5 }),
+    new TokenLimiterProcessor({ maxTokens: 1000 }),
+    new SystemPromptScrubber({ model: openai("gpt-4o-mini") }),
+  ],
+});
+```
+
+### Workflows開発ルール
+```typescript
+// 正しいWorkflow定義例
+import { createWorkflow, createStep } from "@mastra/core/workflows";
+import { z } from "zod";
+
+const step = createStep({
+  id: "step-id", // 必須：一意のID
+  description: "ステップの説明", // 推奨
+  inputSchema: z.object({
+    input: z.string().describe("入力の説明")
+  }),
+  outputSchema: z.object({
+    output: z.string().describe("出力の説明")
+  }),
+  execute: async ({ context, inputData }) => {
+    return { output: "結果" };
+  }
+});
+
+const workflow = createWorkflow({
+  id: "workflow-id", // 必須：一意のID
+  description: "ワークフローの説明", // 推奨
+  inputSchema: z.object({}), // 必須
+  outputSchema: z.object({}) // 必須
+})
+  .then(step)
+  .commit(); // 必須：最後にcommit()を呼ぶ
+```
+
+### Tools開発ルール
+```typescript
+// 正しいTool定義例
+import { createTool } from "@mastra/core/tools";
+import { z } from "zod";
+
+const tool = createTool({
+  id: "tool-id", // 必須：一意のID
+  description: "ツールの説明", // 必須：AIが理解できる説明
+  inputSchema: z.object({
+    param: z.string().describe("パラメータの説明")
+  }),
+  outputSchema: z.object({
+    result: z.string().describe("結果の説明")
+  }),
+  execute: async ({ context }) => {
+    return { result: "結果" };
+  }
+});
+```
+
+### Memory開発ルール
+```typescript
+// 正しいMemory定義例
+import { Memory } from "@mastra/memory";
+import { LibSQLStore } from "@mastra/libsql";
+
+const memory = new Memory({
+  storage: new LibSQLStore({
+    url: "file:memory.db" // または適切なデータベースURL
+  }),
+  options: {
+    semanticRecall: { topK: 10, messageRange: 5 },
+    workingMemory: { enabled: true }
+  }
+});
+
+// エージェントでのメモリ使用
+const response = await agent.generate("メッセージ", {
+  memory: {
+    thread: "user-123",
+    resource: "test-app",
+    options: {
+      semanticRecall: { topK: 5 },
+      workingMemory: { enabled: true }
+    }
+  }
+});
+```
+
+### MCP開発ルール
+```typescript
+// 正しいMCP設定例
+import { MCPClient } from "@mastra/mcp";
+
+const mcp = new MCPClient({
+  servers: {
+    serverName: {
+      command: "npx",
+      args: ["-y", "package-name"]
+    }
+  }
+});
+
+// MCPツールの取得
+const tools = await mcp.getTools();
+```
+
+### A2A（Agent-to-Agent）開発ルール
+```typescript
+// A2A通信の例
+import { A2A } from "@mastra/client-js";
+
+const a2a = new A2A({ serverUrl: "https://your-mastra-server.com" });
+
+// エージェントカードの取得
+const agentCard = await a2a.getAgentCard("agent-id-123");
+
+// メッセージ送信
+await a2a.sendMessage({
+  to: "agent-id-123",
+  from: "my-agent-id",
+  content: "Hello from my agent!",
+});
+
+// タスク作成
+const task = await a2a.createTask({
+  agentId: "agent-id-123",
+  taskType: "processData",
+  payload: { data: [1, 2, 3] },
+});
+```
+
+### テレメトリとAI Tracing開発ルール
+```typescript
+// テレメトリ設定例
+import { PinoLogger } from "@mastra/loggers";
+
+export const mastra = new Mastra({
+  logger: new PinoLogger({
+    name: "Mastra",
+    level: "info"
+  }),
+  telemetry: {
+    isEnabled: true,
+    export: {
+      type: "console" // または適切なエクスポート設定
+    }
+  }
+});
+
+// エージェント呼び出し時のテレメトリ
+const response = await agent.generate("メッセージ", {
+  telemetry: {
+    isEnabled: true,
+    recordInputs: true,
+    recordOutputs: true,
+    functionId: "my-function"
+  }
+});
+```
+
+## スキーマ定義ルール
+- すべてのStep、Workflow、ToolでinputSchemaとoutputSchemaを明確に定義
+- Zodスキーマには必ず `.describe()` を使用して説明を追加
+- スキーマの型は実際のデータ構造と完全に一致させる
+- ネストしたオブジェクトも適切にスキーマ定義する
+
+## エラーハンドリングルール
+- すべての非同期処理にtry-catchを実装
+- エラーメッセージは具体的で理解しやすくする
+- Mastraの型安全性を活用してランタイムエラーを防ぐ
+- ツールの実行失敗時は適切なエラー情報を返す
+- プロセッサーでの`abort()`使用時はTripWireエラーとして処理
+
+## ベストプラクティス
+- Vercel AI SDKと統合する際は型の整合性を確認
+- 動的設定（Dynamic Agents）を活用してRuntime Contextを使用
+- Workflowの制御フロー（.then(), .parallel(), .branch()）を適切に使い分ける
+- Memory機能を使用する際はresourceIdとthreadIdを適切に設定
+- MCPサーバーの設定は開発環境と本番環境で適切に分ける
+- structuredOutputを使用して構造化出力の開発体験を向上
+- プロセッサーを活用してセキュリティとコンテンツ管理を強化
+
+## プロジェクト構造ルール
+```
+src/
+└── mastra/
+    ├── agents/     # Agent定義
+    ├── tools/      # Tool定義
+    ├── workflows/  # Workflow定義
+    ├── memory/     # Memory設定
+    ├── mcp/        # MCP設定
+    ├── processors/ # プロセッサー定義
+    └── index.ts    # Mastraインスタンス
+```
+
+## パフォーマンス最適化
+- 大きなワークフローは適切にステップ分割する
+- 並列実行可能な処理は `.parallel()` を使用
+- メモリ使用量を考慮してセマンティック検索のtopKを調整
+- ツールの実行時間が長い場合はタイムアウト設定を検討
+- プロセッサーでは高速なモデル（gpt-4.1-nano等）を使用
+- 出力プロセッサーでバッチ処理を使用してネットワークオーバーヘッドを削減
+
+## セキュリティルール
+- 環境変数を使用してAPIキーを管理
+- 外部APIアクセス時は適切な認証を実装
+- ユーザー入力のバリデーションを徹底
+- 機密データのログ出力を避ける
+- 入力プロセッサーでプロンプトインジェクション対策を実装
+- PII検出プロセッサーで個人情報を保護
+
+## テストルール
+- 各Tool、Agent、Workflow、プロセッサーに対してユニットテストを作成
+- 統合テストでエンドツーエンドの動作を確認
+- MCPサーバーの接続テストを実装
+- Memory機能のテストでは適切なクリーンアップを実行
+- AI Tracingを使用してテレメトリデータのテストを実装
+- プロセッサーの動作テストを実装
+
+## ドキュメント化ルール
+- 各Agent、Tool、Workflow、プロセッサーにコメントで説明を追加
+- READMEファイルで設定方法と使用方法を説明
+- APIエンドポイントのドキュメントを維持
+- 変更履歴をCHANGELOG.mdで管理
+- AI SDK v5対応状況を明記
+
+## 禁止事項
+- 古いMastra APIの使用（常に最新のAPIを使用）
+- 型安全性を損なうコードの実装
+- 未定義のスキーマでのデータ処理
+- MCP未使用での公式ドキュメント確認不備
+- checklist.mdの更新忘れ
+- experimental_outputの使用（structuredOutputを優先）
+- 非推奨のメモリAPIの使用
+- プロセッサーでのlocalStorageやsessionStorage使用
+
+## 新機能とベータ機能（効率的学習）
+- streamVNext()とgenerateVNext()は実験的機能として使用可能
+- AI Tracingは実験的機能として使用可能
+- A2A通信プロトコルは最新機能として使用可能
+- バッチパーツプロセッサーやトークンリミッタープロセッサーを活用
+- AI SDK v5サポートは段階的に導入
+- **新機能使用時**: 該当機能に特化したドキュメント検索のみ実行
+- **ベータ機能**: エラー発生時の解決パターンを必ずローカルに蓄積
+
+これらのルールに従って、**効率的で持続可能な**型安全なMastraアプリケーションを開発してください。
