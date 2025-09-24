@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+dt - Dev task helper (MVP)
+Usage:
+  dt start -i <issue> [--engine <none|codex|claude>]
+  dt pr    -i <issue>
+
+Commands:
+  start  : Issueを読み込み -> ブランチ作成 -> コンテキスト生成
+  pr     : 変更をコミット/Push -> PR作成（Fixes #<issue> 付き）
+
+Examples:
+  dt start -i 8
+  # 実装後
+  dt pr -i 8
+EOF
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "command not found: $1" >&2; exit 1; }; }
+slugify() {
+  # 引数の文字列を slug に
+  # 依存少なめ: 英数字以外を - に、連続 - を1つに、小文字化
+  echo "$*" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g;s/^-+|-+$//g;s/-+/-/g'
+}
+infer_owner_repo() {
+  local url; url="$(git config --get remote.origin.url || true)"
+  if [[ "$url" =~ github\.com[:/]+([^/]+)/([^/]+)(\.git)?$ ]]; then
+    OWNER="${BASH_REMATCH[1]}"; REPO="${BASH_REMATCH[2]}"; REPO="${REPO%.git}"
+  else
+    echo "origin が GitHub ではありません" >&2; exit 1
+  fi
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  help|-h|--help|'') usage; exit 0 ;;
+  start)
+    need gh; need git
+    ISSUE=""
+    ENGINE=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -i|--issue) ISSUE="$2"; shift 2 ;;
+        --engine) ENGINE="$2"; shift 2 ;;
+        *) echo "unknown arg: $1" >&2; exit 1;;
+      esac
+    done
+    [[ -z "$ISSUE" ]] && { echo "-i/--issue は必須です" >&2; exit 1; }
+    infer_owner_repo
+
+    # Issue 情報
+    TITLE="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q .title)"
+    BODY="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q .body || true)"
+    URL="https://github.com/${OWNER}/${REPO}/issues/${ISSUE}"
+
+    # ブランチ名
+    SLUG="$(slugify "$TITLE")"
+    BR="issue/${ISSUE}-${SLUG}"
+    git fetch origin >/dev/null 2>&1 || true
+    if git rev-parse --verify "$BR" >/dev/null 2>&1; then
+      git switch "$BR"
+    else
+      git switch -c "$BR"
+    fi
+
+    # コンテキスト
+    mkdir -p .devflow
+    cat > .devflow/context.md <<MD
+# Issue #${ISSUE}: ${TITLE}
+
+URL: ${URL}
+
+## Description
+${BODY:-"(no description)"}
+
+## Acceptance criteria
+- [ ] Refer to the Issue and GEMINI.md
+- [ ] Keep commits small (Conventional Commits)
+- [ ] Add tests/docs if needed
+MD
+    echo "[dt] Branch: $BR"
+    echo "[dt] Context: .devflow/context.md"
+
+    # エンジン呼び出し（MVPは none だけ）
+    ENGINE="${ENGINE:-none}"
+    if [[ -x ".devflow/engines/${ENGINE}.sh" ]]; then
+      ".devflow/engines/${ENGINE}.sh" ".devflow/context.md" || true
+    else
+      echo "[dt] エンジン ${ENGINE} は未定義です（.devflow/engines/${ENGINE}.sh を作成してください）"
+    fi
+    ;;
+
+  pr)
+    need gh; need git
+    ISSUE=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -i|--issue) ISSUE="$2"; shift 2 ;;
+        *) echo "unknown arg: $1" >&2; exit 1;;
+      esac
+    done
+    [[ -z "$ISSUE" ]] && { echo "-i/--issue は必須です" >&2; exit 1; }
+
+    # 変更があるか
+    if [[ -z "$(git status --porcelain)" ]]; then
+      echo "[dt] 変更がありません。ファイルを編集してから実行してください" >&2
+      exit 1
+    fi
+
+    # Issue タイトルを取得（コミット/PRに使う）
+    infer_owner_repo
+    TITLE="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q .title)"
+    TYPE="feat" # MVPは固定（config連携は後で）
+
+    git add -A
+    git commit -m "${TYPE}: ${TITLE} (Fixes #${ISSUE})"
+    CUR="$(git rev-parse --abbrev-ref HEAD)"
+    git push -u origin "$CUR"
+
+    gh pr create --title "${TYPE}: ${TITLE}" \
+                 --body "Fixes #${ISSUE}\n\nSee .devflow/context.md for details." \
+                 --base main --head "$CUR"
+
+    echo "[dt] PR を作成しました。レビューに進んでください。"
+    ;;
+
+  *)
+    echo "unknown command: $cmd" >&2; exit 1;;
+esac
