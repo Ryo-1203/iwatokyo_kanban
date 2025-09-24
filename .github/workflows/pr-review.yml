@@ -11,12 +11,10 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Serena を uvx で起動するための uv をインストール
       - name: Install uv (for Serena)
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -26,8 +24,7 @@ jobs:
         uses: google-github-actions/run-gemini-cli@v0
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          gemini_model: "gemini-2.5-pro"    # 手持ちのプランに合わせて調整
-          # ここが .gemini/settings.json として実行前に書き出される
+          gemini_model: "gemini-2.5-pro"
           settings: |
             {
               "contextFileName": ["GEMINI.md", "AGENTS.md"],
@@ -45,4 +42,3 @@ jobs:
                 }
               }
             }
-          # 必要に応じて追加のプロンプトや出力設定を追記可能
