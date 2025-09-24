@@ -1,0 +1,19 @@
+name: Add Issues & PRs to Project
+
+on:
+  issues:
+    types: [opened, reopened, transferred, labeled]
+  pull_request:
+    types: [opened, reopened, labeled]
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add current item to Project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          # あなたのユーザープロジェクトURLに変更
+          # 例: https://github.com/users/Ryo-1203/projects/3
+          project-url: https://github.com/users/Ryo-1203/projects/5
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
