@@ -2,7 +2,7 @@ name: Project Status Sync (PR → Status)
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, closed]
+    types: [opened, reopened, ready_for_review, closed, synchronize]
   pull_request_review:
     types: [submitted]
 
@@ -27,6 +27,7 @@ jobs:
           if [ "$EV" = "pull_request" ]; then
             case "$ACT" in
               opened|reopened|ready_for_review) TARGET="In review" ;;
+              synchronize) TARGET="In review" ;;
               closed)
                 if [ "${{ github.event.pull_request.merged }}" = "true" ]; then TARGET="Done"; else TARGET="Todo"; fi
                 ;;
