@@ -2,19 +2,18 @@ name: Project Status Sync (PR → Status)
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, closed, synchronize]
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed, synchronize]
   pull_request_review:
     types: [submitted]
 
 jobs:
   sync-status:
     runs-on: ubuntu-latest
-    # 失敗してもPRは進めたい場合は ↓ のコメントを外す
-    # continue-on-error: true
     env:
-      PROJECT_OWNER: "Ryo-1203"   # ← あなたのユーザー
-      PROJECT_NUMBER: "5"         # ← DevFlow の番号
+      PROJECT_OWNER: "Ryo-1203"
+      PROJECT_NUMBER: "3"
       STATUS_FIELD_NAME: "Status"
+
     steps:
       - name: Decide target status
         id: decide
@@ -23,102 +22,112 @@ jobs:
           set -e
           EV="${{ github.event_name }}"
           ACT="${{ github.event.action }}"
+          echo "event=$EV action=$ACT"
           TARGET=""
+
           if [ "$EV" = "pull_request" ]; then
             case "$ACT" in
-              opened|reopened|ready_for_review) TARGET="In review" ;;
-              synchronize) TARGET="In review" ;;
+              opened|reopened|ready_for_review|synchronize) TARGET="In review" ;;
+              converted_to_draft) TARGET="" ;;
               closed)
-                if [ "${{ github.event.pull_request.merged }}" = "true" ]; then TARGET="Done"; else TARGET="Todo"; fi
+                if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                  TARGET="Done"
+                else
+                  TARGET="Todo"
+                fi
                 ;;
             esac
           elif [ "$EV" = "pull_request_review" ] && [ "$ACT" = "submitted" ]; then
-            if [ "${{ github.event.review.state }}" = "changes_requested" ]; then TARGET="Changes requested"; fi
+            if [ "${{ github.event.review.state }}" = "changes_requested" ]; then
+              TARGET="Changes requested"
+            fi
           fi
-          echo "TARGET_STATUS=$TARGET" >> $GITHUB_ENV
+
+          # ← ここを outputs で渡す（GITHUB_OUTPUT）
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Target=$TARGET"
-      - name: Update Project Status via GraphQL
-        if: env.TARGET_STATUS != ''
+
+      - name: Update Project Status via GraphQL (verbose)
+        if: ${{ steps.decide.outputs.target != '' }}   # ← env ではなく outputs を見る
+        env:
+          TARGET_STATUS: ${{ steps.decide.outputs.target }}  # ← スクリプトに環境変数で渡す
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
           script: |
+            const core = require('@actions/core');
             const owner = process.env.PROJECT_OWNER;
             const number = parseInt(process.env.PROJECT_NUMBER, 10);
             const fieldName = process.env.STATUS_FIELD_NAME;
             const targetName = process.env.TARGET_STATUS;
 
-            // 1) 取得：Project と Statusフィールド（選択肢ID）
+            // 1) Project と Statusフィールド
             const q1 = await github.graphql(`
               query($owner:String!, $number:Int!) {
                 user(login:$owner) {
                   projectV2(number:$number) {
-                    id
+                    id url
                     fields(first: 50) {
                       nodes {
                         ... on ProjectV2SingleSelectField {
-                          id
-                          name
+                          id name
                           options { id name }
                         }
                       }
                     }
                   }
                 }
-              }`,
-              { owner, number }
+              }`, { owner, number }
             );
-
             const project = q1.user?.projectV2;
             if (!project) core.setFailed(`Project not found: ${owner}/#${number}`);
+            core.info(`Project: ${project.url}`);
 
             const statusField = project.fields.nodes.find(f => f && f.name === fieldName);
             if (!statusField) core.setFailed(`Field not found: ${fieldName}`);
+            core.info(`Status options: ${statusField.options.map(o=>o.name).join(', ')}`);
 
-            const opt = statusField.options.find(o => o.name === targetName);
+            const opt = statusField.options.find(o => o.name.toLowerCase() === targetName.toLowerCase());
             if (!opt) core.setFailed(`Status option not found: ${targetName}`);
 
             const projectId = project.id;
             const fieldId = statusField.id;
             const optionId = opt.id;
 
-            // 2) このPRをProjectに(未追加なら)追加して itemId を得る
+            // 2) PR をプロジェクトに追加/取得
             const prId = context.payload.pull_request.node_id;
             let itemId = null;
-
-            // 2a) まず追加を試す
             try {
               const add = await github.graphql(`
                 mutation($projectId:ID!, $contentId:ID!) {
                   addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}) {
                     item { id }
                   }
-                }`,
-                { projectId, contentId: prId }
+                }`, { projectId, contentId: prId }
               );
               itemId = add.addProjectV2ItemById.item.id;
-            } catch (e) {
-              // 2b) 既にある場合は探す
+              core.info(`Item added: ${itemId}`);
+            } catch {
               const q2 = await github.graphql(`
                 query($contentId:ID!) {
                   node(id:$contentId) {
                     ... on PullRequest {
-                      projectItems: projectV2Items(first:50, includeArchived:true) {
+                      projectV2Items(first:50, includeArchived:true) {
                         nodes { id project { id } }
                       }
                     }
                   }
-                }`,
-                { contentId: prId }
+                }`, { contentId: prId }
               );
-              const nodes = q2.node?.projectItems?.nodes || [];
+              const nodes = q2.node?.projectV2Items?.nodes || [];
               const hit = nodes.find(n => n.project.id === projectId);
-              if (!hit) core.setFailed(`Project item not found for PR`);
+              if (!hit) core.setFailed('Project item not found for PR');
               itemId = hit.id;
+              core.info(`Item found: ${itemId}`);
             }
 
-            // 3) Status を更新
-            const upd = await github.graphql(`
+            // 3) ステータス更新
+            await github.graphql(`
               mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {
                 updateProjectV2ItemFieldValue(
                   input:{
@@ -128,7 +137,6 @@ jobs:
                     value:{ singleSelectOptionId:$optionId }
                   }
                 ) { clientMutationId }
-              }`,
-              { projectId, itemId, fieldId, optionId }
+              }`, { projectId, itemId, fieldId, optionId }
             );
             core.info(`Status set to: ${targetName}`);
