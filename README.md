@@ -22,3 +22,11 @@ View your app in AI Studio: https://ai.studio/apps/drive/1uin6i4s_omtcjs8kLT-7D8
 ## Test- dt テストの追記
 - dt label test
 - dt label inherit test
+- dt label inherit test
+- sync test
+- sync test 2
+- sync test after yaml fix
+- sync test after mapping
+- sync mapping test
+- sync ascii mapping test
+- sync recheck 20:25:08
