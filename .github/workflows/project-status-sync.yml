@@ -6,7 +6,6 @@ on:
   pull_request_review:
     types: [submitted]
 
-# PAT を使うので permissions は必須ではないが、明示の方が安全
 permissions:
   contents: read
   pull-requests: write
@@ -32,7 +31,7 @@ jobs:
 
           if [ "$EV" = "pull_request" ]; then
             case "$ACT" in
-              opened|reopened|ready_for_review|synchronize) TARGET="In Progress" ;;
+              opened|reopened|ready_for_review|synchronize) TARGET="In review" ;;
               converted_to_draft) TARGET="" ;;
               closed)
                 if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
@@ -48,7 +47,7 @@ jobs:
             fi
           fi
 
-          # ← outputs 経由で次ステップへ渡す
+          # 次ステップへ outputs で受け渡し
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Target=$TARGET"
 
@@ -60,24 +59,37 @@ jobs:
         with:
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
           script: |
-            // core / github / context は github-script が注入済み
+            // core, github, context は注入済み（再 require 不要）
             const owner = process.env.PROJECT_OWNER;
             const number = parseInt(process.env.PROJECT_NUMBER, 10);
             const fieldName = process.env.STATUS_FIELD_NAME;
-            const targetName = process.env.TARGET_STATUS;
+            const targetNameRaw = process.env.TARGET_STATUS || "";
 
+            // 正規化 & 同義語マップ（Project 側が "In Progress" でも "In review" 指示を吸収）
+            const norm = s => (s || '').toLowerCase().replace(/[\s_-]+/g, '');
+            const SYN = {
+              'inreview':         ['inprogress', 'review'],
+              'changesrequested': ['inprogress', 'changesrequested'],
+              'inprogress':       ['in progress', 'doing'],
+              'todo':             ['todo', 'backlog'],
+              'done':             ['done', 'completed', 'merged']
+            };
+
+            const targetName = targetNameRaw;
             core.info(`Target from decide: ${targetName}`);
 
-            // 1) Project と Status フィールド
+            // 1) Project と "Status" 単一選択フィールドを取得
             const q1 = await github.graphql(`
               query($owner:String!, $number:Int!) {
                 user(login:$owner) {
                   projectV2(number:$number) {
-                    id url
+                    id
+                    url
                     fields(first: 50) {
                       nodes {
                         ... on ProjectV2SingleSelectField {
-                          id name
+                          id
+                          name
                           options { id name }
                         }
                       }
@@ -88,21 +100,31 @@ jobs:
               { owner, number }
             );
             const project = q1.user?.projectV2;
-            if (!project) core.setFailed(`Project not found: ${owner}/#${number}`);
-            core.info(`Project: ${project.url}`);
+            if (!project) { core.setFailed(\`Project not found: \${owner}/#\${number}\`); return; }
+            core.info(\`Project: \${project.url}\`);
 
             const statusField = project.fields.nodes.find(f => f && f.name === fieldName);
-            if (!statusField) core.setFailed(`Field not found: ${fieldName}`);
-            core.info(`Status options: ${statusField.options.map(o=>o.name).join(', ')}`);
+            if (!statusField) { core.setFailed(\`Field not found: \${fieldName}\`); return; }
+            const opts = statusField.options || [];
+            core.info(\`Status options: \${opts.map(o=>o.name).join(', ')}\`);
 
-            const opt = statusField.options.find(o => o.name.toLowerCase() === targetName.toLowerCase());
-            if (!opt) core.setFailed(`Status option not found: ${targetName}`);
+            // 2) 目標ステータス名を既存の選択肢に解決（同義語も考慮）
+            const candidates = [targetName, ...(SYN[norm(targetName)] || [])];
+            let option = null;
+            for (const cand of candidates) {
+              option = opts.find(o => norm(o.name) === norm(cand));
+              if (option) break;
+            }
+            if (!option) {
+              core.setFailed(\`Status option not found: \${targetName} (available: \${opts.map(o=>o.name).join(', ')})\`);
+              return;
+            }
 
             const projectId = project.id;
-            const fieldId = statusField.id;
-            const optionId = opt.id;
+            const fieldId   = statusField.id;
+            const optionId  = option.id;
 
-            // 2) PR をプロジェクトに追加/取得
+            // 3) PR をプロジェクトに追加（既に入っていれば取得）
             const prId = context.payload.pull_request.node_id;
             let itemId = null;
             try {
@@ -115,8 +137,8 @@ jobs:
                 { projectId, contentId: prId }
               );
               itemId = add.addProjectV2ItemById.item.id;
-              core.info(`Item added: ${itemId}`);
-            } catch {
+              core.info(\`Item added: \${itemId}\`);
+            } catch (e) {
               const q2 = await github.graphql(`
                 query($contentId:ID!) {
                   node(id:$contentId) {
@@ -131,12 +153,12 @@ jobs:
               );
               const nodes = q2.node?.projectV2Items?.nodes || [];
               const hit = nodes.find(n => n.project.id === projectId);
-              if (!hit) core.setFailed('Project item not found for PR');
+              if (!hit) { core.setFailed('Project item not found for PR'); return; }
               itemId = hit.id;
-              core.info(`Item found: ${itemId}`);
+              core.info(\`Item found: \${itemId}\`);
             }
 
-            // 3) ステータス更新
+            // 4) ステータス更新
             await github.graphql(`
               mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $optionId:String!) {
                 updateProjectV2ItemFieldValue(
@@ -150,4 +172,4 @@ jobs:
               }`,
               { projectId, itemId, fieldId, optionId }
             );
-            core.info(`Status set to: ${targetName}`);
+            core.info(\`Status set to: \${option.name}\`);
