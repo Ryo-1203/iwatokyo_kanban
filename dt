@@ -3,14 +3,18 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-dt - Dev task helper (MVP)
+dt - Dev task helper (MVP+)
 Usage:
-  dt start -i <issue> [--engine <none|codex|claude>]
-  dt pr    -i <issue>
+  dt start       -i <issue> [--engine <none|codex|claude>]
+  dt pr          -i <issue>
+  dt undo
+  dt sync-labels -i <issue> [--pr <pr_number>]
 
 Commands:
-  start  : Issueを読み込み -> ブランチ作成 -> コンテキスト生成
-  pr     : 変更をコミット/Push -> PR作成（Fixes #<issue> 付き）-> priorityラベル継承
+  start        : Issueを読み込み -> ブランチ作成 -> コンテキスト生成
+  pr           : 変更をコミット/Push -> PR作成（Fixes #<issue> 付き）-> priorityラベル継承
+  undo         : 直前コミットを取り消し（未pushなら reset、push済みなら revert）
+  sync-labels  : Issueの priority:* ラベルを指定PR（または現在ブランチのPR）に同期
 EOF
 }
 
@@ -24,6 +28,34 @@ infer_owner_repo() {
     echo "origin が GitHub ではありません" >&2; exit 1
   fi
 }
+
+# --- helpers ------------------------------------------------------------------
+
+get_issue_priority_csv() {
+  # prints "priority: high,priority: urgent" or empty
+  gh api "repos/${OWNER}/${REPO}/issues/${1}" -q '.labels[].name' \
+    | grep '^priority:' | paste -sd, - || true
+}
+
+get_open_pr_number_for_head() {
+  # 現在ブランチに紐づくOpen PR番号（なければ空）
+  local head; head="$(git rev-parse --abbrev-ref HEAD)"
+  gh api "repos/${OWNER}/${REPO}/pulls?head=${OWNER}:${head}&state=open" -q '.[0].number' || true
+}
+
+remove_priority_labels_from_pr() {
+  local pr="$1"
+  # PRのラベル(= issues API)を取得して priority:* を削除
+  local labels
+  labels="$(gh api "repos/${OWNER}/${REPO}/issues/${pr}" -q '.labels[].name' | grep '^priority:' || true)"
+  if [[ -n "$labels" ]]; then
+    while IFS= read -r L; do
+      gh api -X DELETE "repos/${OWNER}/${REPO}/issues/${pr}/labels/$(echo "$L" | sed 's/ /%20/g')" >/dev/null || true
+    done <<< "$labels"
+  fi
+}
+
+# --- main ---------------------------------------------------------------------
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
@@ -65,7 +97,7 @@ ${BODY:-"(no description)"}
 - [ ] Keep commits small (Conventional Commits)
 - [ ] Add tests/docs if needed
 MD
-    echo "[dt] Branch: $BR"
+    echo "[dt] Branch : $BR"
     echo "[dt] Context: .devflow/context.md"
 
     ENGINE="${ENGINE:-none}"
@@ -87,16 +119,17 @@ MD
     done
     [[ -z "$ISSUE" ]] && { echo "-i/--issue は必須です" >&2; exit 1; }
 
-    if [[ -z "$(git status --porcelain)" ]]; then
-      echo "[dt] 変更がありません。ファイルを編集してから実行してください" >&2; exit 1
+    if [[ -n "$(git status --porcelain)" ]]; then
+      # 何か変更があればコミット対象とみなす
+      :
     fi
 
     infer_owner_repo
     TITLE="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q .title)"
-    TYPE="feat"  # MVP: 固定
+    TYPE="feat"  # MVP固定
 
     git add -A
-    git commit -m "${TYPE}: ${TITLE} (Fixes #${ISSUE})"
+    git commit -m "${TYPE}: ${TITLE} (Fixes #${ISSUE})" || true  # 既にコミット済みならスキップ
 
     CUR="$(git rev-parse --abbrev-ref HEAD)"
     git push -u origin "$CUR"
@@ -112,25 +145,77 @@ MD
     if [[ "$PR_URL" =~ /pull/([0-9]+) ]]; then
       PR_NUMBER="${BASH_REMATCH[1]}"
     else
-      # フォールバック：現在ブランチのOpen PRを一覧から拾う（表形式をawkでパース）
       CAND="$(gh pr list --state open --head "$CUR" 2>/dev/null | head -n1 | awk '{gsub("#","",$1); print $1}')"
       [[ -n "$CAND" ]] && PR_NUMBER="$CAND"
     fi
-    [[ -z "$PR_NUMBER" ]] && { echo "[dt] PR番号を取得できませんでした。ブラウザでPRを作成した場合はその番号を教えてください。"; exit 1; }
+    [[ -z "$PR_NUMBER" ]] && { echo "[dt] PR番号を取得できませんでした。ブラウザのURLから番号を教えてください。"; exit 1; }
     echo "[dt] PR #${PR_NUMBER} を作成しました。"
 
-    # ---- priority ラベル継承 ----
-    ISSUE_PRIOS="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q '.labels[].name' | grep '^priority:' || true)"
-    if [[ -n "${ISSUE_PRIOS}" ]]; then
-      LABEL_CSV="$(echo "${ISSUE_PRIOS}" | paste -sd, -)"
-      gh pr edit "${PR_NUMBER}" --add-label "${LABEL_CSV}"
-      echo "[dt] PR にラベル付与: ${LABEL_CSV}"
+    # ---- Issue の priority:* ラベルを PR に継承 ----
+    PRI_CSV="$(get_issue_priority_csv "$ISSUE")"
+    if [[ -n "$PRI_CSV" ]]; then
+      gh pr edit "${PR_NUMBER}" --add-label "${PRI_CSV}"
+      echo "[dt] PR にラベル付与: ${PRI_CSV}"
     else
-      echo "[dt] Issue に priority: ラベルが無かったため、ラベル継承はスキップしました。"
+      echo "[dt] Issue に priority: ラベル無し → スキップ"
     fi
-    # ---------------------------------------
 
-    echo "[dt] レビューに進んでください。（Project自動追加/Status同期は既存Workflowが処理します）"
+    echo "[dt] レビューに進んでください。（Project自動追加/Status同期は既存Workflowが処理）"
+    ;;
+
+  undo)
+    need git
+    # 未コミット変更がある場合は安全のため中断
+    if [[ -n "$(git status --porcelain)" ]]; then
+      echo "[dt] 未コミットの変更があります。stash するかコミットしてから再実行してください。" >&2
+      exit 1
+    fi
+    # upstream の有無と ahead/behind を判定
+    if git rev-parse --abbrev-ref @{u} >/dev/null 2>&1; then
+      read -r AHEAD BEHIND < <(git rev-list --left-right --count HEAD...@{u} | awk '{print $1" "$2}')
+      if [[ "${AHEAD:-0}" -gt 0 && "${BEHIND:-0}" -eq 0 ]]; then
+        git reset --hard HEAD~1
+        echo "[dt] ローカル未pushの直前コミットを取り消しました（reset --hard）。"
+      else
+        git revert --no-edit HEAD
+        echo "[dt] 直前コミットを revert しました（新しいrevertコミットを作成）。"
+        echo "     push: git push origin $(git rev-parse --abbrev-ref HEAD)"
+      fi
+    else
+      git reset --hard HEAD~1
+      echo "[dt] upstream未設定 → reset --hard で直前コミットを取り消しました。"
+    fi
+    ;;
+
+  sync-labels)
+    need gh; need git
+    ISSUE=""; PRN=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -i|--issue) ISSUE="$2"; shift 2 ;;
+        --pr)       PRN="$2";   shift 2 ;;
+        *) echo "unknown arg: $1" >&2; exit 1 ;;
+      esac
+    done
+    [[ -z "$ISSUE" ]] && { echo "-i/--issue は必須です" >&2; exit 1; }
+    infer_owner_repo
+
+    if [[ -z "$PRN" ]]; then
+      PRN="$(get_open_pr_number_for_head)"
+      [[ -z "$PRN" ]] && { echo "[dt] 現在ブランチにOpen PRが見つかりません。--pr <番号> を指定してください。"; exit 1; }
+    fi
+
+    echo "[dt] 同期対象: PR #$PRN  ⇐  Issue #$ISSUE"
+
+    # 既存 priority:* を一旦除去 → Issue 側を上書き適用
+    remove_priority_labels_from_pr "$PRN"
+    PRI_CSV="$(get_issue_priority_csv "$ISSUE")"
+    if [[ -n "$PRI_CSV" ]]; then
+      gh pr edit "$PRN" --add-label "$PRI_CSV"
+      echo "[dt] 付与: $PRI_CSV"
+    else
+      echo "[dt] Issue に priority: ラベル無し → PR側 priority ラベルは全削除のままです。"
+    fi
     ;;
 
   *) echo "unknown command: $cmd" >&2; exit 1 ;;
