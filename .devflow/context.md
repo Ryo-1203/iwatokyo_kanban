@@ -1,6 +1,6 @@
-# Issue #10: テスト: README に一行追記
+# Issue #12: dtラベル継承テスト
 
-URL: https://github.com/Ryo-1203/iwatokyo_kanban/issues/10
+URL: https://github.com/Ryo-1203/iwatokyo_kanban/issues/12
 
 ## Description
 (no description)
