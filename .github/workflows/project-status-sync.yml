@@ -6,6 +6,11 @@ on:
   pull_request_review:
     types: [submitted]
 
+# PAT を使うので permissions は必須ではないが、明示の方が安全
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   sync-status:
     runs-on: ubuntu-latest
@@ -43,25 +48,27 @@ jobs:
             fi
           fi
 
-          # ← ここを outputs で渡す（GITHUB_OUTPUT）
+          # ← outputs 経由で次ステップへ渡す
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Target=$TARGET"
 
       - name: Update Project Status via GraphQL (verbose)
-        if: ${{ steps.decide.outputs.target != '' }}   # ← env ではなく outputs を見る
+        if: ${{ steps.decide.outputs.target != '' }}
         env:
-          TARGET_STATUS: ${{ steps.decide.outputs.target }}  # ← スクリプトに環境変数で渡す
+          TARGET_STATUS: ${{ steps.decide.outputs.target }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
           script: |
-            const core = require('@actions/core');
+            // core / github / context は github-script が注入済み
             const owner = process.env.PROJECT_OWNER;
             const number = parseInt(process.env.PROJECT_NUMBER, 10);
             const fieldName = process.env.STATUS_FIELD_NAME;
             const targetName = process.env.TARGET_STATUS;
 
-            // 1) Project と Statusフィールド
+            core.info(`Target from decide: ${targetName}`);
+
+            // 1) Project と Status フィールド
             const q1 = await github.graphql(`
               query($owner:String!, $number:Int!) {
                 user(login:$owner) {
@@ -77,7 +84,8 @@ jobs:
                     }
                   }
                 }
-              }`, { owner, number }
+              }`,
+              { owner, number }
             );
             const project = q1.user?.projectV2;
             if (!project) core.setFailed(`Project not found: ${owner}/#${number}`);
@@ -103,7 +111,8 @@ jobs:
                   addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}) {
                     item { id }
                   }
-                }`, { projectId, contentId: prId }
+                }`,
+                { projectId, contentId: prId }
               );
               itemId = add.addProjectV2ItemById.item.id;
               core.info(`Item added: ${itemId}`);
@@ -117,7 +126,8 @@ jobs:
                       }
                     }
                   }
-                }`, { contentId: prId }
+                }`,
+                { contentId: prId }
               );
               const nodes = q2.node?.projectV2Items?.nodes || [];
               const hit = nodes.find(n => n.project.id === projectId);
@@ -137,6 +147,7 @@ jobs:
                     value:{ singleSelectOptionId:$optionId }
                   }
                 ) { clientMutationId }
-              }`, { projectId, itemId, fieldId, optionId }
+              }`,
+              { projectId, itemId, fieldId, optionId }
             );
             core.info(`Status set to: ${targetName}`);
