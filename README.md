@@ -25,3 +25,4 @@ View your app in AI Studio: https://ai.studio/apps/drive/1uin6i4s_omtcjs8kLT-7D8
 - dt label inherit test
 - sync test
 - sync test 2
+- sync test after yaml fix
