@@ -32,7 +32,7 @@ jobs:
 
           if [ "$EV" = "pull_request" ]; then
             case "$ACT" in
-              opened|reopened|ready_for_review|synchronize) TARGET="In review" ;;
+              opened|reopened|ready_for_review|synchronize) TARGET="In Progress" ;;
               converted_to_draft) TARGET="" ;;
               closed)
                 if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
