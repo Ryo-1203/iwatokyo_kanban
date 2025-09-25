@@ -1,9 +1,9 @@
-# Issue #8: 2025_0924_test
+# Issue #10: テスト: README に一行追記
 
-URL: https://github.com/Ryo-1203/iwatokyo_kanban/issues/8
+URL: https://github.com/Ryo-1203/iwatokyo_kanban/issues/10
 
 ## Description
-PRテスト
+(no description)
 
 ## Acceptance criteria
 - [ ] Refer to the Issue and GEMINI.md
