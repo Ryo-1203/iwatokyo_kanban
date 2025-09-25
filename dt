@@ -101,14 +101,25 @@ MD
     CUR="$(git rev-parse --abbrev-ref HEAD)"
     git push -u origin "$CUR"
 
-    # PR作成（ready状態で作成）
-    PR_NUMBER="$(gh pr create --title "${TYPE}: ${TITLE}" \
-                              --body "Fixes #${ISSUE}\n\nSee .devflow/context.md for details." \
-                              --base main --head "$CUR" \
-                              --json number -q .number)"
+    # --- 互換版：古い gh でも動く PR 作成 & PR番号取得 ---
+    PR_URL=$(gh pr create \
+               --title "${TYPE}: ${TITLE}" \
+               --body "Fixes #${ISSUE}\n\nSee .devflow/context.md for details." \
+               --base main --head "$CUR" 2>&1 | tail -n1)
+    echo "[dt] create output: $PR_URL"
+
+    PR_NUMBER=""
+    if [[ "$PR_URL" =~ /pull/([0-9]+) ]]; then
+      PR_NUMBER="${BASH_REMATCH[1]}"
+    else
+      # フォールバック：現在ブランチのOpen PRを一覧から拾う（表形式をawkでパース）
+      CAND="$(gh pr list --state open --head "$CUR" 2>/dev/null | head -n1 | awk '{gsub("#","",$1); print $1}')"
+      [[ -n "$CAND" ]] && PR_NUMBER="$CAND"
+    fi
+    [[ -z "$PR_NUMBER" ]] && { echo "[dt] PR番号を取得できませんでした。ブラウザでPRを作成した場合はその番号を教えてください。"; exit 1; }
     echo "[dt] PR #${PR_NUMBER} を作成しました。"
 
-    # ---- ここから「priority ラベル継承」 ----
+    # ---- priority ラベル継承 ----
     ISSUE_PRIOS="$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}" -q '.labels[].name' | grep '^priority:' || true)"
     if [[ -n "${ISSUE_PRIOS}" ]]; then
       LABEL_CSV="$(echo "${ISSUE_PRIOS}" | paste -sd, -)"
